@@ -31,10 +31,9 @@ module Pos.Core.Common.Types
 
        -- * Coin
        , Coin
-       , CoinPortion
+       , CoinPortion (..)
        , coinF
        , unsafeGetCoin
-       , getCoinPortion
        , mkCoin
        , coinPortionDenominator
        , mkCoinPortion
