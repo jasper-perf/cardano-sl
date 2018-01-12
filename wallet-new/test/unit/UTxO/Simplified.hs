@@ -1,10 +1,22 @@
 -- | Simplifying wrapper around the Cardano core libraries
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE NoMonomorphismRestriction #-}
 module UTxO.Simplified (
+    -- * Simplified API to the core block generation API
     Simplified(..)
   , Simpl(..)
+    -- * Genesis data
+  , genesisBlock0
+  , generatedActors
+  , Actors(..)
+  , Rich(..)
+  , Poor(..)
+    -- * Translation context
   , Translate
   , runTranslate
+  , lift
+  , liftPure
+  , liftMaybe
   ) where
 
 import Universum hiding (lift)
@@ -12,18 +24,27 @@ import Control.Exception (throw)
 import Control.Monad.Except (MonadError)
 import Data.Default (def)
 import System.IO.Error (userError)
+import Formatting (bprint, build, (%))
+import Serokell.Util (listJson, pairF)
 import qualified Data.List.NonEmpty as NE
+import qualified Data.Text.Buildable
 
 import Pos.Block.Logic
 import Pos.Client.Txp
-import Pos.Context
-import Pos.Core
+import Pos.Core hiding (genesisData, generatedSecrets)
 import Pos.Crypto
 import Pos.Ssc
 import Pos.Update
+import qualified Pos.Context
+import qualified Pos.Core
 
--- Testing infrastructure from cardano-sl-core
--- TODO: both of these use defaultTestConf. Not sure if that works for us
+{-------------------------------------------------------------------------------
+  Testing infrastructure from cardano-sl-core
+
+  The genesis block comes from defaultTestConf, which in turn uses
+  configuration.yaml. It is specified by a 'GenesisSpec'.
+-------------------------------------------------------------------------------}
+
 import Test.Pos.Util (
     withDefConfiguration
   , withDefUpdateConfiguration
@@ -121,7 +142,7 @@ instance Simplified MainBlock where
         prev <-
           case blockPrev of
             Just block -> (Right . view gbHeader) <$> fromSimpl block
-            Nothing    -> (Left  . view gbHeader) <$> liftPure genesisBlock0
+            Nothing    -> (Left  . view gbHeader) <$> genesisBlock0
 
         lift $ createMainBlockPure
           blockSizeLimit
@@ -137,6 +158,111 @@ instance Simplified MainBlock where
             )
     where
       blockSizeLimit = 1 * 1024 * 1024 -- 1 MB
+
+{-------------------------------------------------------------------------------
+  Genesis data
+
+  See also:
+
+  * 'generateGenesisData'
+-------------------------------------------------------------------------------}
+
+genesisBlock0 :: Translate GenesisBlock
+genesisBlock0 = liftPure Pos.Context.genesisBlock0
+
+generatedActors :: Translate Actors
+generatedActors = do
+     secrets <- liftMaybe "Generated secrets unavailable" Pos.Core.generatedSecrets
+     return Actors {
+         actorsRich = map mkRich (richKeys secrets)
+       , actorsPoor = map mkPoor (poorKeys secrets)
+       }
+  where
+    richKeys :: GeneratedSecrets -> [SecretKey]
+    richKeys = map rsPrimaryKey . gsRichSecrets -- this just ignores Vss keys
+
+    poorKeys :: GeneratedSecrets -> [EncryptedSecretKey]
+    poorKeys = gsPoorSecrets
+
+    -- TODO: This mapping from the secret keys to the corresponding addresses
+    -- is already present in generateGenesisData , but it is not returned.
+    -- I see no choice currently but to recompute it. This is unfortunate
+    -- because it means that when 'generateGenesisData' changes, we'll be
+    -- out of sync here. Also, we're assuming here that 'tboUseHDAddresses'
+    -- is true ('useHDAddresses' must be set to true in the config yaml file).
+
+    mkRich :: SecretKey -> Rich
+    mkRich sk = Rich {
+          richKey  = sk
+        , richAddr = makePubKeyAddressBoot (toPublic sk)
+        }
+
+    mkPoor :: EncryptedSecretKey -> Poor
+    mkPoor sk = Poor {
+          poorKey   = sk
+        , poorAddrs = [ case deriveFirstHDAddress
+                               (IsBootstrapEraAddr True)
+                               emptyPassphrase
+                               sk of
+                          Nothing          -> error "impossible"
+                          Just (addr, key) -> (key, addr)
+                      ]
+        }
+
+
+-- | A rich actor has a key and a "simple" (non-HD) address
+data Rich = Rich {
+      richKey  :: SecretKey
+    , richAddr :: Address
+    }
+  deriving (Show)
+
+-- | A poor actor gets a HD wallet, so it has a SecretKey per address
+-- (current generation just creates a single address though)
+--
+-- NOTE: `encToSecret :: EncryptedSecretKey -> SecretKey`
+data Poor = Poor {
+      poorKey   :: EncryptedSecretKey
+    , poorAddrs :: [(EncryptedSecretKey, Address)]
+    }
+  deriving (Show)
+
+data Actors = Actors {
+      actorsRich :: [Rich]
+    , actorsPoor :: [Poor]
+    }
+  deriving (Show)
+
+{-------------------------------------------------------------------------------
+  Pretty-printing
+-------------------------------------------------------------------------------}
+
+instance Buildable Rich where
+  build Rich{..} = bprint ( "Rich {"
+                          % "key: " % build
+                          % ", addr: " % build
+                          % "}"
+                          )
+                          richKey
+                          richAddr
+
+instance Buildable Poor where
+  build Poor{..} = bprint ( "Poor {"
+                          % "key: " % build
+                          % ", addrs: " % listJson
+                          % "}"
+                          )
+                          (encToSecret poorKey)
+                          (map (bprint pairF . first encToSecret) poorAddrs)
+
+instance Buildable Actors where
+  build Actors{..} = bprint ( "Actors {"
+                            % "rich: " % listJson
+                            % " poor: " % listJson
+                            % "}"
+                            )
+                            actorsRich
+                            actorsPoor
 
 {-------------------------------------------------------------------------------
   Translation context
@@ -166,6 +292,11 @@ lift act = Translate act
 liftPure :: ((HasConfiguration, HasUpdateConfiguration) => a) -> Translate a
 liftPure a = Translate (Right a)
 
+liftMaybe :: Text -> ((HasConfiguration, HasUpdateConfiguration) => Maybe a) -> Translate a
+liftMaybe err ma = Translate $ case ma of
+                                 Just a  -> Right a
+                                 Nothing -> Left err
+
 runTranslate :: Translate a -> a
 runTranslate (Translate act) =
    withDefConfiguration $
@@ -176,6 +307,72 @@ runTranslate (Translate act) =
 
 {-------------------------------------------------------------------------------
   BELOW THIS LINE IS JUST EXPERIMENTATION
+-------------------------------------------------------------------------------}
+
+
+{-------------------------------------------------------------------------------
+  GenesisData
+
+encToSecret :: EncryptedSecretKey -> SecretKey
+encToSecret (EncryptedSecretKey sk _) = SecretKey sk
+
+-- | Generate a public key using an encrypted secret key and passphrase
+encToPublic :: EncryptedSecretKey -> PublicKey
+encToPublic = toPublic . encToSecret
+
+-- | Valuable secrets which can unlock genesis data.
+data GeneratedSecrets = GeneratedSecrets
+    { gsDlgIssuersSecrets :: ![SecretKey]
+    -- ^ Secret keys which issued heavyweight delegation certificates
+    -- in genesis data. If genesis heavyweight delegation isn't used,
+    -- this list is empty.
+    , gsRichSecrets       :: ![RichSecrets]
+    -- ^ All secrets of rich nodes.
+    , gsPoorSecrets       :: ![EncryptedSecretKey]
+    -- ^ Keys for HD addresses of poor nodes.
+    , gsFakeAvvmSeeds     :: ![ByteString]
+    -- ^ Fake avvm seeds.
+    }
+
+It makes sense that this wouldn't have any private keys, since normally the nodes
+wouldn't have those. But presumably they do get created someplace during testing?
+
+
+generateGenesisData
+    :: (HasCryptoConfiguration, HasGenesisBlockVersionData, HasProtocolConstants)
+    => GenesisInitializer
+    -> GenesisAvvmBalances
+    -> GeneratedGenesisData
+
+    , tboUseHDAddresses :: !Bool
+    -- ^ Whether generate plain addresses or with hd payload.
+
+
+data GenesisData = GenesisData
+    { gdBootStakeholders :: !GenesisWStakeholders
+    , gdHeavyDelegation  :: !GenesisDelegation
+    , gdStartTime        :: !Timestamp
+    , gdVssCerts         :: !GenesisVssCertificatesMap
+    , gdNonAvvmBalances  :: !GenesisNonAvvmBalances
+    , gdBlockVersionData :: !BlockVersionData
+    , gdProtocolConsts   :: !ProtocolConstants
+    , gdAvvmDistr        :: !GenesisAvvmBalances
+    , gdFtsSeed          :: !SharedSeed
+    } deriving (Show, Eq)
+
+newtype GenesisWStakeholders = GenesisWStakeholders
+    { getGenesisWStakeholders :: Map StakeholderId Word16
+    } deriving (Show, Eq, Monoid)
+
+newtype GenesisDelegation = UnsafeGenesisDelegation
+    { unGenesisDelegation :: HashMap StakeholderId ProxySKHeavy
+    } deriving (Show, Eq, Container, NontrivialContainer)
+
+-- | Stakeholder identifier (stakeholders are identified by their public keys)
+type StakeholderId = AddressHash PublicKey
+
+
+
 -------------------------------------------------------------------------------}
 
 {-------------------------------------------------------------------------------

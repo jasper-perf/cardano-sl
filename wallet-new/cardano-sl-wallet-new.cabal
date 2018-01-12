@@ -235,7 +235,10 @@ test-suite wallet-unit-tests
                     , cardano-sl-ssc
                     , cardano-sl-update
                     , data-default
+                    , formatting
                     , mtl
+                    , serokell-util
+                    , text-format
                     , universum
 
 test-suite wallet-new-specs
