@@ -24,7 +24,7 @@ type Addr = Simpl Address
 data Block = Block {
       blockPrev  :: Maybe Block
     , blockSId   :: SlotId
-    , blockKey   :: SecretKey
+    , blockKey   :: SecretKey -- TODO: Should probably be "rich actor"
     , blockTrans :: [DSL.Transaction Addr]
     }
 
