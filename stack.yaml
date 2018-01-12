@@ -91,6 +91,10 @@ packages:
     commit: 6693ff91be2f0b015c2ab043292587c1cc9449cf
   extra-dep: true
 
+- location:
+    git: https://github.com/avieth/cryptonite
+    commit: 2b68d1e9cfd23d4c00ca35a600ebbcfc9891101b
+  extra-dep: true
 # Required for explorer
 - location:
     git: https://github.com/serokell/engine.io.git
@@ -154,6 +158,9 @@ extra-deps:
 - lens-sop-0.2.0.2
 - json-sop-0.2.0.3
 - servant-generic-0.1.0.1
+- basement-0.0.5
+- foundation-0.0.18
+- memory-0.14.12
 
 # This is for CI to pass --fast to all dependencies
 apply-ghc-options: everything
