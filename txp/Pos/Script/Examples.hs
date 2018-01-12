@@ -30,6 +30,8 @@ module Pos.Script.Examples
        ) where
 
 import qualified Data.ByteString as BS
+import           Data.ByteString.Builder (toLazyByteString, byteString)
+import qualified Data.ByteString.Lazy as LBS
 import           Formatting (build, sformat, (%))
 import           NeatInterpolation (text)
 import           Serokell.Util.Base16 (base16F)
@@ -138,7 +140,7 @@ multisigValidator n ids = fromE $ parseValidator [text|
     shownN = show n
     mkCons h s = sformat ("(Cons #"%hashHexF%" "%build%")") h s
     shownIds = foldr mkCons "Nil" ids
-    shownTag = sformat ("#"%base16F) (signTag SignTx)
+    shownTag = sformat ("#"%base16F) (LBS.toStrict (toLazyByteString (signTag SignTx)))
 
 multisigRedeemer :: HasConfiguration => TxSigData -> [Maybe SafeSigner] -> Script
 multisigRedeemer txSigData sks = fromE $ parseRedeemer [text|
@@ -226,7 +228,7 @@ sigStressRedeemer n = fromE $ parseRedeemer [text|
   where
     ns = show n
     (pk, sk) = deterministicKeyGen (BS.replicate 32 0)
-    sig = signRaw Nothing sk (BS.pack [0])
+    sig = signRaw Nothing sk (byteString (BS.pack [0]))
 
     keyS = sformat fullPublicKeyHexF pk
     sigS = sformat fullSignatureHexF sig

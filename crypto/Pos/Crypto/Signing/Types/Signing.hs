@@ -46,10 +46,10 @@ import           Pos.Crypto.Hashing (hash)
 ----------------------------------------------------------------------------
 
 instance Eq CC.XPub where
-    a == b = CC.unXPub a == CC.unXPub b
+    (==) = CC.eqXPub
 
 instance Ord CC.XPub where
-    compare = comparing CC.unXPub
+    compare = CC.compareXPub
 
 instance Show CC.XPub where
     show = show . CC.unXPub

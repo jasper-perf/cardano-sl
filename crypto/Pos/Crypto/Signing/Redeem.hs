@@ -9,7 +9,10 @@ module Pos.Crypto.Signing.Redeem
 import           Universum
 
 import           Crypto.Random (MonadRandom, getRandomBytes)
+import           Data.ByteString.Builder (Builder)
+import qualified Data.ByteString.Builder.Extra as Builder
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as LBS
 import           Data.Coerce (coerce)
 
 import qualified Crypto.Sign.Ed25519 as Ed25519
@@ -44,6 +47,9 @@ redeemDeterministicKeyGen seed =
 -- Redeem signatures
 ----------------------------------------------------------------------------
 
+toLazyByteString :: Builder -> LBS.ByteString
+toLazyByteString = Builder.toLazyByteStringWith (Builder.safeStrategy 1024 4096) mempty
+
 -- | Encode something with 'Binary' and sign it.
 redeemSign ::
        (HasCryptoConfiguration, Bi a)
@@ -51,17 +57,17 @@ redeemSign ::
     -> RedeemSecretKey
     -> a
     -> RedeemSignature a
-redeemSign tag k = coerce . redeemSignRaw (Just tag) k . Bi.serialize'
+redeemSign tag k = coerce . redeemSignRaw (Just tag) k . Bi.serializeBuilder
 
 -- | Alias for constructor.
 redeemSignRaw ::
        HasCryptoConfiguration
     => Maybe SignTag
     -> RedeemSecretKey
-    -> ByteString
+    -> Builder
     -> RedeemSignature Raw
 redeemSignRaw mbTag (RedeemSecretKey k) x =
-    RedeemSignature (Ed25519.dsign k (tag <> x))
+    RedeemSignature (Ed25519.dsign k (LBS.toStrict (toLazyByteString (tag <> x))))
   where
     tag = maybe mempty signTag mbTag
 
@@ -71,7 +77,7 @@ redeemCheckSig
     :: (HasCryptoConfiguration, Bi a)
     => SignTag -> RedeemPublicKey -> a -> RedeemSignature a -> Bool
 redeemCheckSig tag k x s =
-    redeemVerifyRaw (Just tag) k (Bi.serialize' x) (coerce s)
+    redeemVerifyRaw (Just tag) k (Bi.serializeBuilder x) (coerce s)
 
 -- CHECK: @redeemVerifyRaw
 -- | Verify raw 'ByteString'.
@@ -79,10 +85,10 @@ redeemVerifyRaw ::
        HasCryptoConfiguration
     => Maybe SignTag
     -> RedeemPublicKey
-    -> ByteString
+    -> Builder
     -> RedeemSignature Raw
     -> Bool
 redeemVerifyRaw mbTag (RedeemPublicKey k) x (RedeemSignature s) =
-    Ed25519.dverify k (tag <> x) s
+    Ed25519.dverify k (LBS.toStrict (toLazyByteString (tag <> x))) s
   where
     tag = maybe mempty signTag mbTag

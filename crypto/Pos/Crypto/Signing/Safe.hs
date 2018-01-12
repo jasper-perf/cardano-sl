@@ -22,6 +22,9 @@ import           Universum
 import qualified Cardano.Crypto.Wallet as CC
 import           Crypto.Random (MonadRandom, getRandomBytes)
 import qualified Data.ByteString as BS
+import           Data.ByteString.Builder (Builder, byteString)
+import qualified Data.ByteString.Builder.Extra as Builder
+import qualified Data.ByteString.Lazy as LBS
 import           Data.Coerce (coerce)
 
 import           Pos.Binary.Class (Bi, Raw)
@@ -47,21 +50,24 @@ changeEncPassphrase oldPass newPass esk@(EncryptedSecretKey sk _)
         Just <$> mkEncSecretUnsafe newPass (CC.xPrvChangePass oldPass newPass sk)
     | otherwise = return Nothing
 
+toLazyByteString :: Builder -> LBS.ByteString
+toLazyByteString = Builder.toLazyByteStringWith (Builder.safeStrategy 1024 4096) mempty
+
 signRaw' :: HasCryptoConfiguration
          => Maybe SignTag
          -> PassPhrase
          -> EncryptedSecretKey
-         -> ByteString
+         -> Builder
          -> Signature Raw
 signRaw' mbTag (PassPhrase pp) (EncryptedSecretKey sk _) x =
-    Signature (CC.sign pp sk (tag <> x))
+    Signature (CC.sign pp sk (LBS.toStrict (toLazyByteString (tag <> x))))
   where
     tag = maybe mempty signTag mbTag
 
 sign'
     :: (HasCryptoConfiguration, Bi a)
     => SignTag -> PassPhrase -> EncryptedSecretKey -> a -> Signature a
-sign' t pp sk = coerce . signRaw' (Just t) pp sk . Bi.serialize'
+sign' t pp sk = coerce . signRaw' (Just t) pp sk . Bi.serializeBuilder
 
 safeCreateKeypairFromSeed
     :: BS.ByteString
@@ -146,8 +152,8 @@ safeCreateProxyCert :: (HasCryptoConfiguration, Bi w) => SafeSigner -> PublicKey
 safeCreateProxyCert ss (PublicKey delegatePk) o = coerce $ ProxyCert sig
   where
     Signature sig = safeSign SignProxySK ss $
-                      mconcat
-                          ["00", CC.unXPub delegatePk, Bi.serialize' o]
+                      LBS.toStrict $ toLazyByteString $ mconcat
+                          [byteString "00", byteString (CC.unXPub delegatePk), Bi.serializeBuilder o]
 
 -- | Creates proxy secret key
 safeCreatePsk :: (HasCryptoConfiguration, Bi w) => SafeSigner -> PublicKey -> w -> ProxySecretKey w

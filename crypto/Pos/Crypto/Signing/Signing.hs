@@ -34,7 +34,10 @@ import           Universum
 import qualified Cardano.Crypto.Wallet as CC
 import           Crypto.Random (MonadRandom, getRandomBytes)
 import           Data.ByteArray (ScrubbedBytes)
+import           Data.ByteString.Builder (Builder, byteString)
+import qualified Data.ByteString.Builder.Extra as Builder
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as LBS
 import           Data.Coerce (coerce)
 import           Formatting (Format, build, later, sformat, (%))
 import qualified Serokell.Util.Base16 as B16
@@ -90,6 +93,9 @@ parseFullSignature s = do
     b <- B16.decode s
     Signature <$> first fromString (CC.xsignature b)
 
+toLazyByteString :: Builder -> LBS.ByteString
+toLazyByteString = Builder.toLazyByteStringWith (Builder.safeStrategy 1024 4096) mempty
+
 -- | Encode something with 'Binary' and sign it.
 sign
     :: (HasCryptoConfiguration, Bi a)
@@ -97,7 +103,7 @@ sign
     -> SecretKey
     -> a
     -> Signature a
-sign t k = coerce . signRaw (Just t) k . Bi.serialize'
+sign t k = coerce . signRaw (Just t) k . Bi.serializeBuilder
 
 -- | Sign a bytestring.
 signRaw
@@ -106,9 +112,9 @@ signRaw
                        -- allow no tag to be provided just in case you need
                        -- to sign /exactly/ the bytestring you provided
     -> SecretKey
-    -> ByteString
+    -> Builder
     -> Signature Raw
-signRaw mbTag (SecretKey k) x = Signature (CC.sign emptyPass k (tag <> x))
+signRaw mbTag (SecretKey k) x = Signature (CC.sign emptyPass k (LBS.toStrict (toLazyByteString (tag <> x))))
   where
     tag = maybe mempty signTag mbTag
 
@@ -122,7 +128,7 @@ checkSig ::
     -> a
     -> Signature a
     -> Bool
-checkSig t k x s = verifyRaw (Just t) k (Bi.serialize' x) (coerce s)
+checkSig t k x s = verifyRaw (Just t) k (Bi.serializeBuilder x) (coerce s)
 
 -- CHECK: @verifyRaw
 -- | Verify raw 'ByteString'.
@@ -130,10 +136,10 @@ verifyRaw ::
        HasCryptoConfiguration
     => Maybe SignTag
     -> PublicKey
-    -> ByteString
+    -> Builder
     -> Signature Raw
     -> Bool
-verifyRaw mbTag (PublicKey k) x (Signature s) = CC.verify k (tag <> x) s
+verifyRaw mbTag (PublicKey k) x (Signature s) = CC.verify k (LBS.toStrict (toLazyByteString (tag <> x))) s
   where
     tag = maybe mempty signTag mbTag
 
@@ -149,7 +155,11 @@ mkSigned t sk x = Signed x (sign t sk x)
 verifyProxyCert :: (HasCryptoConfiguration, Bi w) => PublicKey -> PublicKey -> w -> ProxyCert w -> Bool
 verifyProxyCert issuerPk (PublicKey delegatePk) o (ProxyCert sig) =
     checkSig SignProxySK issuerPk
-        (mconcat ["00", CC.unXPub delegatePk, Bi.serialize' o])
+        -- Should use a builder here.
+        -- Bi.serialize' will first make the LBS, then copy to a BS, then
+        -- the mconcat will copy it again, along with unXPub delegatePK.
+        -- Would be faster to Builder mappend them and then write it out
+        (toLazyByteString $ mconcat [byteString "00", byteString (CC.unXPub delegatePk), Bi.serializeBuilder o])
         (Signature sig)
 
 -- | Formatter for 'ProxyCert' to show it in hex.
@@ -190,10 +200,10 @@ proxySign t sk@(SecretKey delegateSk) psk@ProxySecretKey{..} m
     PublicKey issuerPk = pskIssuerPk
     sigma =
         CC.sign emptyPass delegateSk $
-        mconcat
+        LBS.toStrict $ toLazyByteString $ mconcat
             -- it's safe to put the tag after issuerPk because `CC.unXPub
             -- issuerPk` always takes 64 bytes
-            ["01", CC.unXPub issuerPk, signTag t, Bi.serialize' m]
+            [byteString "01", byteString (CC.unXPub issuerPk), signTag t, Bi.serializeBuilder m]
 
 -- CHECK: @proxyVerify
 -- | Verify delegated signature given issuer's pk, signature, message
@@ -212,10 +222,10 @@ proxyVerify t ProxySignature{..} omegaPred m =
     sigValid =
         CC.verify
             pdDelegatePkRaw
-            (mconcat
-                 [ "01"
-                 , CC.unXPub issuerPk
+            (LBS.toStrict $ toLazyByteString $ mconcat
+                 [ byteString "01"
+                 , byteString (CC.unXPub issuerPk)
                  , signTag t
-                 , Bi.serialize' m
+                 , Bi.serializeBuilder m
                  ])
             psigSig

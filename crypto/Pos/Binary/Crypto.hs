@@ -8,13 +8,14 @@ module Pos.Binary.Crypto () where
 import           Universum
 
 import qualified Cardano.Crypto.Wallet as CC
-import qualified Crypto.ECC.Ed25519 as Ed25519
+import qualified Crypto.Math.Edwards25519 as Ed25519
 import           Crypto.Hash (Digest, digestFromByteString, byteStringFromDigest)
 import qualified Crypto.PVSS as Pvss
 import qualified Crypto.SCRAPE as Scrape
 import qualified Crypto.Sign.Ed25519 as EdStandard
 import qualified Data.ByteArray as ByteArray
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Builder.Extra as Builder
 import           Formatting (int, sformat, (%))
 
 import           Pos.Binary.Class (AsBinary (..), Bi (..), Cons (..), Field (..), decodeBinary,
@@ -145,7 +146,9 @@ instance Bi CC.ChainCode where
     decode = CC.ChainCode <$> decode
 
 instance Bi CC.XPub where
-    encode (CC.unXPub -> kc) = encode kc
+    encode (CC.unXPub' -> kc) = encode $
+        -- An XPub is 64 bytes.
+        Builder.toLazyByteStringWith (Builder.safeStrategy 64 64) mempty kc
     decode = either fail pure . CC.xpub =<< decode
 
 instance Bi CC.XPrv where

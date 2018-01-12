@@ -60,6 +60,10 @@ newtype VssPublicKey = VssPublicKey
 
 -- | Note: this is an important instance, don't change it! It dictates the
 -- order of participants when generating a commitment.
+--
+-- AHA! FIXME This is probably very slow...
+-- Imagine sorting a list on this. How many compares are done? There's that
+-- many encodes * 2.
 instance Ord VssPublicKey where
     compare = comparing Binary.encode
 
