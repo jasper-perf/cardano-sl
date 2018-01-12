@@ -23,6 +23,7 @@ import Universum hiding (lift)
 import Control.Exception (throw)
 import Control.Monad.Except (MonadError)
 import Data.Default (def)
+import Data.List ((!!))
 import System.IO.Error (userError)
 import Formatting (bprint, build, (%))
 import Serokell.Util (listJson, pairF)
@@ -59,18 +60,35 @@ class Simplified a where
 
   fromSimpl :: Simpl a -> Translate a
 
+instance Simplified Address where
+  -- | Address of known actor
+  data Simpl Address =
+      -- | Rich actors only have a single (non-HD) address
+      AddrRich Int
+
+      -- | Poor actors however have a number of addresses (in principle, in
+      -- practice currently only one)
+    | AddrPoor Int Int
+
+  -- TODO: Right now this will cause a re-computation of the known actors every
+  -- single time. We need to fix that (and possibly allow for the actors to
+  -- be dynamic).
+  fromSimpl :: Simpl Address -> Translate Address
+  fromSimpl addr = actorAddr addr <$> generatedActors
+
 instance Simplified (SecretKey, TxIn) where
   data Simpl (SecretKey, TxIn) = Input {
-      inpOwner :: SecretKey
+      inpOwner :: Simpl Address
     , inpTrans :: Simpl TxAux
     , inpIndex :: Word32
     }
 
   fromSimpl :: Simpl (SecretKey, TxIn) -> Translate (SecretKey, TxIn)
   fromSimpl Input{..} = do
+      inpOwner' <- actorKey inpOwner <$> generatedActors
       inpTrans' <- (hash . taTx) <$> fromSimpl inpTrans
       return (
-          inpOwner
+          inpOwner'
         , TxInUtxo {
               txInHash  = inpTrans'
             , txInIndex = inpIndex
@@ -79,17 +97,19 @@ instance Simplified (SecretKey, TxIn) where
 
 instance Simplified TxOutAux where
   data Simpl TxOutAux = Output {
-      outAddr :: Address
+      outAddr :: Simpl Address
     , outVal  :: Word64
     }
 
   fromSimpl :: Simpl TxOutAux -> Translate TxOutAux
-  fromSimpl Output{..} = return TxOutAux {
-        toaOut = TxOut {
-            txOutAddress = outAddr
-          , txOutValue   = mkCoin outVal
-          }
-      }
+  fromSimpl Output{..} = do
+      outAddr' <- fromSimpl outAddr
+      return TxOutAux {
+          toaOut = TxOut {
+              txOutAddress = outAddr'
+            , txOutValue   = mkCoin outVal
+            }
+        }
 
 instance Simplified TxAux where
   data Simpl TxAux = Transaction {
@@ -232,6 +252,14 @@ data Actors = Actors {
     , actorsPoor :: [Poor]
     }
   deriving (Show)
+
+actorAddr :: Simpl Address -> Actors -> Address
+actorAddr (AddrRich i)   Actors{..} = richAddr (actorsRich !! i)
+actorAddr (AddrPoor i j) Actors{..} = snd (poorAddrs (actorsPoor !! i) !! j)
+
+actorKey :: Simpl Address -> Actors -> SecretKey
+actorKey (AddrRich i)   Actors{..} = richKey (actorsRich !! i)
+actorKey (AddrPoor i j) Actors{..} = encToSecret (fst (poorAddrs (actorsPoor !! i) !! j))
 
 {-------------------------------------------------------------------------------
   Pretty-printing

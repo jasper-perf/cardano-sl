@@ -212,7 +212,8 @@ test-suite wallet-unit-tests
                       UTxO.Simplified
                       UTxO.Interpreter
   default-language:   Haskell2010
-  default-extensions: FlexibleContexts
+  default-extensions: ConstraintKinds
+                      FlexibleContexts
                       FlexibleInstances
                       GADTs
                       InstanceSigs

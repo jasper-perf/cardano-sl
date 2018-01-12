@@ -1,7 +1,6 @@
 module UTxO.Interpreter (
     -- * Additional types
-    Addr(..)
-  , Block(..)
+    Block(..)
     -- * Interpretation proper
   , Interpret(..)
   , int'
@@ -20,11 +19,7 @@ import qualified UTxO.Simplified as Simpl
   Additional types not in the basic UTxO formalization
 -------------------------------------------------------------------------------}
 
--- | Bird's eye view of an address
-data Addr = Addr {
-      addr    :: Address
-    , addrKey :: SecretKey
-    }
+type Addr = Simpl Address
 
 data Block = Block {
       blockPrev  :: Maybe Block
@@ -54,7 +49,7 @@ instance Interpret (DSL.Input Addr) where
   int inp@DSL.Input{..} =
     case DSL.outAddr (DSL.out inp) of
       DSL.AddrOrdinary owner -> Simpl.Input {
-          inpOwner = addrKey owner
+          inpOwner = owner
         , inpTrans = int inpTrans
         , inpIndex = inpIndex
         }
@@ -63,7 +58,7 @@ instance Interpret (DSL.Input Addr) where
 instance Interpret (DSL.Output Addr) where
   type Interpreted (DSL.Output Addr) = TxOutAux
 
-  int DSL.Output{outAddr = DSL.AddrOrdinary Addr{..}, ..} = Simpl.Output {
+  int DSL.Output{outAddr = DSL.AddrOrdinary addr, ..} = Simpl.Output {
         outAddr = addr
       , outVal  = outVal
       }
